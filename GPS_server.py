@@ -227,9 +227,9 @@ class LocationResource(resource.Resource):
         if building == "True":
             beacon_status = {
                 "Entrance Beacon": True,
-                "Elevator_Lobby Beacon": False,
-                "Third_Floor Beacon": False,
-                "Room_Hallway Beacon": False               
+                "Elevator_Lobby Beacon": True,
+                "Third_Floor Beacon": True,
+                "Room_Hallway Beacon": True,               
             }
             response = get_response(beacon_status)
         else:
