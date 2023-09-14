@@ -333,18 +333,21 @@ Tuesday, September 19
 
    
     async def render_get(self, request):
-      try:
+     
         #We are extracting the day parameter
         day = self._extract_query_value(request.opt.uri_query, 'day')
 
 
-        if day == "Monday":
+        if not day:
+            combined_agenda = self.monday_agenda + "\n" + self.tuesday_agenda
+            payload = combined_agenda
+        elif day == "Monday":
             payload = self.monday_agenda
         elif day == "Tuesday":
             payload = self.tuesday_agenda
-        else:  # If no day parameter or unrecognized day
-             combined_agenda = self.monday_agenda + "\n" + self.tuesday_agenda
-             return aiocoap.Message(payload=combined_agenda.encode('utf-8'))
+        else:  # If an unrecognized day is provided
+            error_message = "There is no valid day. You can only enter 'Monday', 'Tuesday' or you can let it empty."
+            return aiocoap.Message(code=aiocoap.BAD_REQUEST, payload=error_message.encode('utf-8'))
 
         # Check for conditional GET using ETag
         current_etag = hashlib.md5(payload.encode('utf-8')).digest()  # Compute ETag for the current payload
@@ -357,18 +360,7 @@ Tuesday, September 19
         
         response.opt.max_age = 86400  # Cache for 1 day (86400 seconds)
         return response
-      except InvalidDayError as ide:
-            logging.error(str(ide))
-            response = aiocoap.Message(payload=str(ide).encode('utf-8'))
-            response.code = aiocoap.BAD_REQUEST
-            return response
-
-      except Exception as e:
-            logging.error(f"An unexpected error occurred: {e}")
-            response = aiocoap.Message(payload="Internal Server Error".encode('utf-8'))
-            response.code = aiocoap.INTERNAL_SERVER_ERROR
-            return response
-       
+       #return Bad request 
 async def main():
      root = resource.Site()
 
