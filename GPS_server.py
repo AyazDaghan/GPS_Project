@@ -2,6 +2,7 @@ from asyncio import constants
 import logging
 from math import radians, sin, cos, sqrt, atan2
 import asyncio
+from pickle import FALSE
 import aiocoap
 import aiocoap.resource as resource
 from aiocoap.numbers import constants
@@ -9,6 +10,9 @@ import googlemaps
 import re
 import html
 import datetime
+import hashlib
+
+
 
 gmaps = googlemaps.Client(key='AIzaSyC2JgwnTDFah4hCTwdeK9DVhWtrW_5eDFM')
     #For convert HTML codes to the normal characters
@@ -174,18 +178,20 @@ BEACON_SEQUENCE = [
 ]
 
 BEACON_INSTRUCTIONS = {
-    "Entrance Beacon": "Please go straight towards 50 meters. The elevator will be on your left.",
-    "Elevator_Lobby Beacon": "Take the elevator to the 4th floor.",
-    "Third_Floor Beacon": "Turn right, continue walking, and wait on the first left.",
-    "Room_Hallway Beacon": "Go straight and find room 205. It will be on your right."
+    "Entrance Beacon": "\nPlease go straight towards 50 meters. The elevator will be on your left.",
+    "Elevator_Lobby Beacon": "\nTake the elevator to the 4th floor.",
+    "Third_Floor Beacon": "\nTurn right, continue walking, and wait on the first left.",
+    "Room_Hallway Beacon": "\nGo straight and find room 205. It will be on your right."
 }
+
     
     #For extracting data from beacons
-def get_response(beacon_sequence):
-    for beacon in BEACON_SEQUENCE:
-        if beacon_sequence[beacon]:
-            return BEACON_INSTRUCTIONS
+def get_response(beacon_status):
+    for beacon, status in beacon_status.items():
+        if status:
+            return BEACON_INSTRUCTIONS.get(beacon, "Unknown beacon detected.")
     return "Please follow the previous instructions."
+
 
 
 class LocationResource(resource.Resource):
@@ -202,6 +208,7 @@ class LocationResource(resource.Resource):
         return None
 
     async def render_get(self, request):
+      try:
         # Extract latitude, longitude and mode from the incoming request's query
         client_lat = self._extract_query_value(request.opt.uri_query, 'lat')
         client_lon = self._extract_query_value(request.opt.uri_query, 'lon')
@@ -227,11 +234,12 @@ class LocationResource(resource.Resource):
         if building == "True":
             beacon_status = {
                 "Entrance Beacon": True,
-                "Elevator_Lobby Beacon": True,
-                "Third_Floor Beacon": True,
-                "Room_Hallway Beacon": True,               
+                "Elevator_Lobby Beacon": False,
+                "Third_Floor Beacon": False,
+                "Room_Hallway Beacon": False,               
             }
             response = get_response(beacon_status)
+
         else:
                # If the client is inside the university circle
                 if is_inside_or_oustide_circle(client_lat, client_lon, self.university_center[0], self.university_center[1], self.radius):        
@@ -242,12 +250,131 @@ class LocationResource(resource.Resource):
                     response = "\n" + get_direction_to_conf(client_lat, client_lon, mode)
 
         return aiocoap.Message(payload=response.encode('utf-8'))
+      except Exception as e:
+        logging.error(f"Error while processing request: {e}")
+        return aiocoap.Message(payload="Internal Server Error", code=aiocoap.INTERNAL_SERVER_ERROR)
+    
+class InvalidDayError(Exception):
+    """Raised when an invalid day is provided."""
+    pass
 
+class AgendaResource(resource.Resource):
+    def __init__(self):
+        super(AgendaResource, self).__init__()
+        #Agenda that shows what to do at what time
+        self.monday_agenda = """
+Monday, September 18
+09:00am (UTC+2): Registration and Coffee
+
+09:00am - 11:30am (UTC+2): RIOT Tutorial
+(room 4-110)
+
+11:30am - 12:30pm (UTC+2): Welcome & Keynote
+(room 4-8)
+
+12:30pm - 1:45pm (UTC+2): Lunch
+(canteen)
+
+1:45pm - 3:15pm (UTC+2): Session Networking
+(room 4-8)
+
+3:15pm - 3:45pm (UTC+2): Coffee Break
+(room 4-112)
+
+3:45pm- 5:15pm (UTC+2): Session System
+(room 4-8)
+
+5:15pm- 5:45pm (UTC+2): Planning breakout sessions
+(room 4-8)
+
+6:20pm (UTC+2): Departure for Social Event
+
+7:00pm (UTC+2): Social Event at Zum Rad
+"""
+        self.tuesday_agenda = """
+Tuesday, September 19
+09:00am - 10:30am (UTC+2): General Assembly
+(room 4-8)
+
+10:30am - 12:30am (UTC+2): Breakout Sessions
+
+12:30pm - 1:30am (UTC+2): Lunch
+(room 4-111/112)
+
+1:30pm- 3:00pm (UTC+2): Session Security
+(room 4-8)
+
+3:00pm - 3:30pm (UTC+2): Coffee Break
+(room 4-112)
+
+3:30pm - 5:00pm (UTC+2): Session Applications
+(room 4-8)
+
+5:00pm - 5:15pm (UTC+2): Open Mic
+(room 4-8)
+
+5:15pm - 5:30pm (UTC+2): Wrap-Up
+(room 4-8)
+"""
+
+
+
+
+    def generate_etag(self, content):
+        #We are generating ETag based on content
+        return hashlib.md5(content.encode()).digest()
+
+    def _extract_query_value(self, query_list, key):
+         for item in query_list:
+             k, v = item.split('=')
+             if k == key:
+                return v
+         return None  # Make sure to return None if the key isn't found
+
+   
+    async def render_get(self, request):
+      try:
+        #We are extracting the day parameter
+        day = self._extract_query_value(request.opt.uri_query, 'day')
+
+
+        if day == "Monday":
+            payload = self.monday_agenda
+        elif day == "Tuesday":
+            payload = self.tuesday_agenda
+        else:  # If no day parameter or unrecognized day
+             combined_agenda = self.monday_agenda + "\n" + self.tuesday_agenda
+             return aiocoap.Message(payload=combined_agenda.encode('utf-8'))
+
+        # Check for conditional GET using ETag
+        current_etag = hashlib.md5(payload.encode('utf-8')).digest()  # Compute ETag for the current payload
+        if 'ETag' in request.opt.option_list() and request.opt.etag == current_etag:
+               response = aiocoap.Message(code=aiocoap.VALID)
+        else:
+               response = aiocoap.Message(payload=payload.encode('utf-8'))
+        # Add ETag option to response
+        response.opt.etag = current_etag
+        
+        response.opt.max_age = 86400  # Cache for 1 day (86400 seconds)
+        return response
+      except InvalidDayError as ide:
+            logging.error(str(ide))
+            response = aiocoap.Message(payload=str(ide).encode('utf-8'))
+            response.code = aiocoap.BAD_REQUEST
+            return response
+
+      except Exception as e:
+            logging.error(f"An unexpected error occurred: {e}")
+            response = aiocoap.Message(payload="Internal Server Error".encode('utf-8'))
+            response.code = aiocoap.INTERNAL_SERVER_ERROR
+            return response
+       
 async def main():
      root = resource.Site()
 
      root.add_resource(['.well-known', 'core'], resource.WKCResource(root.get_resources_as_linkheader))
      root.add_resource(['location'], LocationResource())
+     root.add_resource(('agenda',), AgendaResource())
 
      await aiocoap.Context.create_server_context(bind=('::1',constants.COAP_PORT),site=root)
 
