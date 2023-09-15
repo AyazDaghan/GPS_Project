@@ -184,15 +184,12 @@ BEACON_INSTRUCTIONS = {
     "Room_Hallway Beacon": "\nGo straight and find room 205. It will be on your right."
 }
 
-    
     #For extracting data from beacons
 def get_response(beacon_status):
     for beacon, status in beacon_status.items():
         if status:
             return BEACON_INSTRUCTIONS.get(beacon, "Unknown beacon detected.")
     return "Please follow the previous instructions."
-
-
 
 class LocationResource(resource.Resource):
     university_center = (50.130654, 8.692722)  # This is our center's coordinates
@@ -316,10 +313,6 @@ Tuesday, September 19
 5:15pm - 5:30pm (UTC+2): Wrap-Up
 (room 4-8)
 """
-
-
-
-
     def generate_etag(self, content):
         #We are generating ETag based on content
         return hashlib.md5(content.encode()).digest()
@@ -346,7 +339,7 @@ Tuesday, September 19
         elif day == "Tuesday":
             payload = self.tuesday_agenda
         else:  # If an unrecognized day is provided
-            error_message = "There is no valid day. You can only enter 'Monday', 'Tuesday' or you can let it empty."
+            error_message = "There is no valid day. You can only enter 'Monday', 'Tuesday' or you can left it empty."
             return aiocoap.Message(code=aiocoap.BAD_REQUEST, payload=error_message.encode('utf-8'))
 
         # Check for conditional GET using ETag
@@ -361,12 +354,67 @@ Tuesday, September 19
         response.opt.max_age = 86400  # Cache for 1 day (86400 seconds)
         return response
        #return Bad request 
+
+class ConferenceTimingResource(resource.Resource):
+    def __init__(self):
+        super(ConferenceTimingResource, self).__init__()
+
+        self.monday_schedule = {
+            ("09:00am", "11:30am"): "Room 4-110",
+            ("11:30am", "12:30pm"): "Room 4-8", 
+            ("12:30pm", "1:45pm"): "Canteen",
+            ("1:45pm" , "3:15pm"): "Room 4-8",
+            ("3:15pm" , "3:45pm"): "Room 4-112",
+            ("3:45pm" , "5:15pm"): "Room 4-8",
+            ("5:15pm" , "5:45pm"): "Room 4-8",
+        }
+        
+        self.tuesday_schedule = {
+            ("09:00am", "10:30am"): "General Assembly(Room 4-8)",
+            ("10:30am", "12:30pm"): "Breakout Session", 
+            ("12:30pm", "1:30pm"): "Lunch(room 4-111/112)",
+            ("1:30pm" , "3:00pm"): "Session Security(Room 4-8)",
+            ("3:00pm" , "3:30pm"): "Coffee Break(Room 4-112)",
+            ("3:30pm" , "5:00pm"): "Session Applications(Room 4-8)",
+            ("5:00pm" , "5:15pm"): "Open Mic(Room 4-8)",
+            ("5:15pm" , "5:30pm"): "Wrap-Up(Room 4-8)",
+        }
+        
+    def current_session(self):
+        now = datetime.datetime.now().time()  
+        today = datetime.datetime.now().date().weekday()#To separate Monday and Tuesday
+
+        #Check if today is Monday or Tuesday (0: Monday, 1: Tuesday)
+        if today == 0:
+            schedule = self.monday_schedule
+        elif today == 1:
+            schedule = self.tuesday_schedule
+        else:
+            return None  #Not a conference day
+        
+        for (start, end), room in self.schedule.items():
+            start_time = datetime.datetime.strptime(start, "%I:%M%p").time()
+            end_time = datetime.datetime.strptime(end, "%I:%M%p").time()
+            
+            if start_time <= now < end_time:
+                return room
+        return None
+
+    async def render_get(self, request):
+        room = self.current_session()
+        if room:
+            return aiocoap.Message(payload=f"The conference is currently in {room}".encode('utf-8'))
+        else:
+            return aiocoap.Message(payload="No conference session is currently active.".encode('utf-8'))
+
+
 async def main():
      root = resource.Site()
 
      root.add_resource(['.well-known', 'core'], resource.WKCResource(root.get_resources_as_linkheader))
      root.add_resource(['location'], LocationResource())
-     root.add_resource(('agenda',), AgendaResource())
+     root.add_resource(['agenda',], AgendaResource())
+     root.add_resource(['time'], ConferenceTimingResource())
 
      await aiocoap.Context.create_server_context(bind=('::1',constants.COAP_PORT),site=root)
 
